@@ -1,0 +1,162 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 33% 98%;
+    --foreground: 220 20% 20%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 20%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 20%;
+
+    --primary: 210 50% 73%;
+    --primary-foreground: 220 30% 15%;
+
+    --secondary: 210 30% 95%;
+    --secondary-foreground: 220 20% 30%;
+
+    --muted: 210 20% 94%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 30 60% 95%;
+    --accent-foreground: 30 50% 30%;
+
+    --destructive: 0 70% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 150 50% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 210 20% 90%;
+    --input: 210 20% 92%;
+    --ring: 210 50% 73%;
+
+    --radius: 1rem;
+
+    /* Kindly custom tokens */
+    --kindly-blue: 210 50% 73%;
+    --kindly-blue-light: 210 60% 90%;
+    --kindly-blue-dark: 210 45% 55%;
+    --kindly-cream: 40 40% 97%;
+    --kindly-warm: 30 30% 96%;
+    --kindly-rose: 350 60% 95%;
+    --kindly-mint: 160 40% 94%;
+    --kindly-lavender: 270 40% 95%;
+    
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(210 50% 73%) 0%, hsl(220 60% 30%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(210 30% 98%) 100%);
+    --gradient-primary-text: linear-gradient(135deg, hsl(210 50% 73%) 0%, hsl(220 55% 25%) 100%);
+    --gradient-warm: linear-gradient(135deg, hsl(40 40% 97%) 0%, hsl(30 30% 96%) 100%);
+    
+    /* Shadows */
+    --shadow-sm: 0 2px 8px -2px hsl(210 30% 20% / 0.08);
+    --shadow-md: 0 8px 24px -8px hsl(210 30% 20% / 0.12);
+    --shadow-lg: 0 16px 48px -12px hsl(210 30% 20% / 0.15);
+    --shadow-card: 0 4px 20px -4px hsl(210 30% 20% / 0.1);
+  }
+
+  .dark {
+    --background: 220 20% 10%;
+    --foreground: 210 30% 95%;
+
+    --card: 220 20% 14%;
+    --card-foreground: 210 30% 95%;
+
+    --popover: 220 20% 14%;
+    --popover-foreground: 210 30% 95%;
+
+    --primary: 210 50% 65%;
+    --primary-foreground: 220 30% 10%;
+
+    --secondary: 220 15% 20%;
+    --secondary-foreground: 210 30% 90%;
+
+    --muted: 220 15% 18%;
+    --muted-foreground: 210 20% 60%;
+
+    --accent: 30 40% 20%;
+    --accent-foreground: 30 50% 90%;
+
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 22%;
+    --input: 220 15% 20%;
+    --ring: 210 50% 65%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer components {
+  .kindly-card {
+    @apply bg-card rounded-2xl shadow-card overflow-hidden;
+    background: var(--gradient-card);
+  }
+
+  .kindly-chip {
+    @apply px-3 py-1.5 rounded-full text-sm font-medium bg-secondary text-secondary-foreground;
+  }
+
+  .kindly-chip-primary {
+    @apply px-3 py-1.5 rounded-full text-sm font-medium bg-primary/20 text-primary-foreground;
+  }
+
+  .kindly-input {
+    @apply w-full px-4 py-3 rounded-xl bg-input border border-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all;
+  }
+
+  .kindly-btn {
+    @apply px-6 py-3 rounded-xl font-medium transition-all duration-200 active:scale-[0.98];
+  }
+
+  .kindly-btn-primary {
+    @apply kindly-btn bg-primary text-primary-foreground hover:bg-primary/90;
+  }
+
+  .kindly-btn-secondary {
+    @apply kindly-btn bg-secondary text-secondary-foreground hover:bg-secondary/80;
+  }
+
+  .kindly-btn-outline {
+    @apply kindly-btn border-2 border-primary text-primary-foreground bg-transparent hover:bg-primary/10;
+  }
+
+  .mobile-container {
+    @apply max-w-md mx-auto min-h-screen bg-background;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
