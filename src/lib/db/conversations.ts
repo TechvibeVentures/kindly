@@ -9,14 +9,15 @@ export type Conversation = Tables<'conversations'> & {
 };
 
 export type Message = Tables<'messages'>;
-export type ConversationTopic = Tables<'conversation_topics'>;
+export type ConversationTopic = Tables<'conversation_topic_coverages'>;
 
 export type ConversationInsert = TablesInsert<'conversations'>;
 export type MessageInsert = TablesInsert<'messages'>;
 export type ConversationTopicUpdate = TablesUpdate<'conversation_topics'>;
 
 /**
- * Get all conversations for the current user with messages and topics
+ * Get all conversations for the current user with messages and topics.
+ * Schema uses user_a_id, user_b_id (auth user ids).
  */
 export async function getUserConversations(): Promise<any[]> {
   const { data: { session } } = await supabase.auth.getSession();
@@ -26,37 +27,54 @@ export async function getUserConversations(): Promise<any[]> {
 
   const { data: conversations, error } = await supabase
     .from('conversations')
-    .select(`
-      *,
-      candidate_profile:profiles!conversations_candidate_id_fkey(*),
-      user_profile:profiles!conversations_user_id_fkey(*)
-    `)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false });
+    .select('*')
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
+    .order('updated_at', { ascending: false });
 
   if (error) throw error;
-  
-  // Fetch messages and topics for each conversation
+
+  // Fetch profiles for both participants (profiles.user_id = auth user id)
+  const allUserIds = [...new Set((conversations || []).flatMap((c: any) => [c.user_a_id, c.user_b_id]))];
+  const { data: profilesData } = await supabase
+    .from('profiles')
+    .select('*')
+    .in('user_id', allUserIds);
+  const profilesByUserId = new Map((profilesData || []).map((p: any) => [p.user_id, p]));
+
   const conversationsWithData = await Promise.all(
-    (conversations || []).map(async (conv) => {
-      const [messagesResult, topicsResult] = await Promise.all([
+    (conversations || []).map(async (conv: any) => {
+      const [messagesResult, coveragesResult] = await Promise.all([
         supabase
           .from('messages')
           .select('*')
           .eq('conversation_id', conv.id)
           .order('created_at', { ascending: true }),
         supabase
-          .from('conversation_topics')
+          .from('conversation_topic_coverages')
           .select('*')
           .eq('conversation_id', conv.id)
-          .order('topic_id', { ascending: true })
       ]);
+
+      const user_profile = profilesByUserId.get(conv.user_a_id) || null;
+      const candidate_profile = profilesByUserId.get(conv.user_b_id) || null;
+
+      // Map coverages to topic rows: seeker=user_a, candidate=user_b
+      const coverages = coveragesResult.data || [];
+      const topicIds = [...new Set(coverages.map((c: any) => c.topic_id))];
+      const topics = topicIds.map((topicId: string) => ({
+        topic_id: topicId,
+        seeker_covered: coverages.some((c: any) => c.topic_id === topicId && c.user_id === conv.user_a_id),
+        candidate_covered: coverages.some((c: any) => c.topic_id === topicId && c.user_id === conv.user_b_id),
+      }));
 
       return {
         ...conv,
+        user_id: conv.user_a_id,
+        candidate_id: conv.user_b_id,
+        user_profile,
+        candidate_profile,
         messages: messagesResult.data || [],
-        topics: topicsResult.data || [],
+        topics,
       };
     })
   );
@@ -75,21 +93,30 @@ export async function getConversationById(conversationId: string): Promise<Conve
 
   const { data, error } = await supabase
     .from('conversations')
-    .select(`
-      *,
-      candidate_profile:profiles!conversations_candidate_id_fkey(*),
-      user_profile:profiles!conversations_user_id_fkey(*)
-    `)
+    .select('*')
     .eq('id', conversationId)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
     .maybeSingle();
 
-  if (error) throw error;
-  return data as Conversation | null;
+  if (error || !data) return data as Conversation | null;
+
+  const [userProfile, candidateProfile] = await Promise.all([
+    supabase.from('profiles').select('*').eq('user_id', data.user_a_id).maybeSingle(),
+    supabase.from('profiles').select('*').eq('user_id', data.user_b_id).maybeSingle(),
+  ]);
+
+  return {
+    ...data,
+    user_id: data.user_a_id,
+    candidate_id: data.user_b_id,
+    user_profile: userProfile.data || null,
+    candidate_profile: candidateProfile.data || null,
+  } as Conversation;
 }
 
 /**
- * Get or create a conversation with a candidate
+ * Get or create a conversation with a candidate.
+ * candidateId is the profile id of the candidate; we resolve to auth user_id for the schema.
  */
 export async function getOrCreateConversation(candidateId: string): Promise<any> {
   const { data: { session } } = await supabase.auth.getSession();
@@ -97,65 +124,66 @@ export async function getOrCreateConversation(candidateId: string): Promise<any>
     throw new Error('Not authenticated');
   }
 
-  // Check if conversation already exists
+  // Resolve candidate profile id -> auth user_id
+  const { data: candidateProfile } = await supabase
+    .from('profiles')
+    .select('user_id')
+    .eq('id', candidateId)
+    .maybeSingle();
+  const candidateUserId = candidateProfile?.user_id;
+  if (!candidateUserId) {
+    throw new Error('Candidate profile not found');
+  }
+
+  const userA = session.user.id < candidateUserId ? session.user.id : candidateUserId;
+  const userB = session.user.id < candidateUserId ? candidateUserId : session.user.id;
+
   const { data: existing } = await supabase
     .from('conversations')
     .select('*')
-    .eq('user_id', session.user.id)
-    .eq('candidate_id', candidateId)
+    .eq('user_a_id', userA)
+    .eq('user_b_id', userB)
     .maybeSingle();
 
-  let conversation;
+  let conversation: any;
   if (existing) {
-    // Fetch with related data
-    const { data } = await supabase
-      .from('conversations')
-      .select(`
-        *,
-        candidate_profile:profiles!conversations_candidate_id_fkey(*),
-        user_profile:profiles!conversations_user_id_fkey(*)
-      `)
-      .eq('id', existing.id)
-      .single();
-    conversation = data;
+    conversation = existing;
   } else {
-    // Create new conversation
-    const { data: newConversation, error } = await supabase
+    const { data: newConv, error } = await supabase
       .from('conversations')
-      .insert({
-        user_id: session.user.id,
-        candidate_id: candidateId,
-        status: 'active'
-      })
-      .select(`
-        *,
-        candidate_profile:profiles!conversations_candidate_id_fkey(*),
-        user_profile:profiles!conversations_user_id_fkey(*)
-      `)
+      .insert({ user_a_id: userA, user_b_id: userB, status: 'active' })
+      .select()
       .single();
-
     if (error) throw error;
-    conversation = newConversation;
+    conversation = newConv;
   }
 
-  // Fetch messages and topics
-  const [messagesResult, topicsResult] = await Promise.all([
-    supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', conversation.id)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('conversation_topics')
-      .select('*')
-      .eq('conversation_id', conversation.id)
-      .order('topic_id', { ascending: true })
+  const [messagesResult, coveragesResult] = await Promise.all([
+    supabase.from('messages').select('*').eq('conversation_id', conversation.id).order('created_at', { ascending: true }),
+    supabase.from('conversation_topic_coverages').select('*').eq('conversation_id', conversation.id),
+  ]);
+
+  const coverages = coveragesResult.data || [];
+  const topicIds = [...new Set(coverages.map((c: any) => c.topic_id))];
+  const topics = topicIds.map((topicId: string) => ({
+    topic_id: topicId,
+    seeker_covered: coverages.some((c: any) => c.topic_id === topicId && c.user_id === conversation.user_a_id),
+    candidate_covered: coverages.some((c: any) => c.topic_id === topicId && c.user_id === conversation.user_b_id),
+  }));
+
+  const [userProfile, candProfile] = await Promise.all([
+    supabase.from('profiles').select('*').eq('user_id', conversation.user_a_id).maybeSingle(),
+    supabase.from('profiles').select('*').eq('user_id', conversation.user_b_id).maybeSingle(),
   ]);
 
   return {
     ...conversation,
+    user_id: conversation.user_a_id,
+    candidate_id: conversation.user_b_id,
+    user_profile: userProfile.data || null,
+    candidate_profile: candProfile.data || null,
     messages: messagesResult.data || [],
-    topics: topicsResult.data || [],
+    topics,
   };
 }
 
@@ -173,7 +201,7 @@ export async function getConversationMessages(conversationId: string): Promise<M
     .from('conversations')
     .select('id')
     .eq('id', conversationId)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
     .maybeSingle();
 
   if (!conversation) {
@@ -204,7 +232,7 @@ export async function sendMessage(conversationId: string, text: string): Promise
     .from('conversations')
     .select('id')
     .eq('id', conversationId)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
     .maybeSingle();
 
   if (!conversation) {
@@ -216,7 +244,7 @@ export async function sendMessage(conversationId: string, text: string): Promise
     .insert({
       conversation_id: conversationId,
       sender_id: session.user.id,
-      text: text.trim()
+      content: text.trim()
     })
     .select()
     .single();
@@ -241,12 +269,8 @@ export async function updateConversationStatus(
     .from('conversations')
     .update({ status })
     .eq('id', conversationId)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
-    .select(`
-      *,
-      candidate_profile:profiles!conversations_candidate_id_fkey(*),
-      user_profile:profiles!conversations_user_id_fkey(*)
-    `)
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
+    .select('*')
     .single();
 
   if (error) throw error;
@@ -265,23 +289,29 @@ export async function getConversationTopics(conversationId: string): Promise<Con
   // Verify access
   const { data: conversation } = await supabase
     .from('conversations')
-    .select('id')
+    .select('id, user_a_id, user_b_id')
     .eq('id', conversationId)
-    .or(`user_id.eq.${session.user.id},candidate_id.eq.${session.user.id}`)
+    .or(`user_a_id.eq.${session.user.id},user_b_id.eq.${session.user.id}`)
     .maybeSingle();
 
   if (!conversation) {
     throw new Error('Conversation not found or access denied');
   }
 
-  const { data, error } = await supabase
-    .from('conversation_topics')
+  const { data: coverages } = await supabase
+    .from('conversation_topic_coverages')
     .select('*')
-    .eq('conversation_id', conversationId)
-    .order('topic_id', { ascending: true });
+    .eq('conversation_id', conversationId);
 
-  if (error) throw error;
-  return (data || []) as ConversationTopic[];
+  const cov = coverages || [];
+  const topicIds = [...new Set(cov.map((c: any) => c.topic_id))];
+  const topics = topicIds.map((topicId: string) => ({
+    topic_id: topicId,
+    seeker_covered: cov.some((c: any) => c.topic_id === topicId && c.user_id === conversation.user_a_id),
+    candidate_covered: cov.some((c: any) => c.topic_id === topicId && c.user_id === conversation.user_b_id),
+  }));
+
+  return topics as ConversationTopic[];
 }
 
 /**
@@ -301,7 +331,7 @@ export async function updateTopicCoverage(
   // Verify access
   const { data: conversation } = await supabase
     .from('conversations')
-    .select('id, user_id, candidate_id')
+    .select('id, user_a_id, user_b_id')
     .eq('id', conversationId)
     .maybeSingle();
 
@@ -309,40 +339,31 @@ export async function updateTopicCoverage(
     throw new Error('Conversation not found');
   }
 
-  // Verify user is part of this conversation
-  if (conversation.user_id !== session.user.id && conversation.candidate_id !== session.user.id) {
+  const userId = isSeeker ? conversation.user_a_id : conversation.user_b_id;
+  if (userId !== session.user.id) {
     throw new Error('Access denied');
   }
 
-  // Determine which field to update
-  const updateField = isSeeker ? 'seeker_covered' : 'candidate_covered';
-
-  const { data, error } = await supabase
-    .from('conversation_topics')
-    .update({ [updateField]: covered })
-    .eq('conversation_id', conversationId)
-    .eq('topic_id', topicId)
-    .select()
-    .single();
-
-  if (error) {
-    // If topic doesn't exist, create it
-    if (error.code === 'PGRST116') {
-      const { data: newTopic, error: insertError } = await supabase
-        .from('conversation_topics')
-        .insert({
-          conversation_id: conversationId,
-          topic_id: topicId,
-          [updateField]: covered
-        })
-        .select()
-        .single();
-      if (insertError) throw insertError;
-      return newTopic as ConversationTopic;
-    }
-    throw error;
+  if (covered) {
+    const { data: inserted, error } = await supabase
+      .from('conversation_topic_coverages')
+      .upsert(
+        { conversation_id: conversationId, topic_id: topicId, user_id: userId },
+        { onConflict: 'conversation_id,topic_id,user_id' }
+      )
+      .select()
+      .single();
+    if (error) throw error;
+    return { topic_id: topicId, user_id: userId } as ConversationTopic;
+  } else {
+    const { error } = await supabase
+      .from('conversation_topic_coverages')
+      .delete()
+      .eq('conversation_id', conversationId)
+      .eq('topic_id', topicId)
+      .eq('user_id', userId);
+    if (error) throw error;
+    return { topic_id: topicId, user_id: userId } as ConversationTopic;
   }
-
-  return data as ConversationTopic;
 }
 

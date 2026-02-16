@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import {
   getUserConversations,
   getConversationById,
@@ -14,14 +16,42 @@ import {
 } from '@/lib/db/conversations';
 
 /**
- * Hook to get all conversations for the current user
+ * Hook to get all conversations for the current user.
+ * Subscribes to realtime changes on conversations and messages.
  */
 export function useConversations() {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const result = useQuery({
     queryKey: ['conversations'],
     queryFn: getUserConversations,
     staleTime: 30 * 1000, // 30 seconds
   });
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('conversations-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'conversations' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
+
+  return result;
 }
 
 /**
@@ -51,16 +81,43 @@ export function useGetOrCreateConversation() {
 }
 
 /**
- * Hook to get messages for a conversation
+ * Hook to get messages for a conversation.
+ * Subscribes to realtime INSERT on messages table for this conversation.
  */
 export function useConversationMessages(conversationId: string | null) {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const result = useQuery({
     queryKey: ['messages', conversationId],
     queryFn: () => conversationId ? getConversationMessages(conversationId) : [],
     enabled: !!conversationId,
     staleTime: 10 * 1000, // 10 seconds
-    refetchInterval: 5000, // Poll every 5 seconds for new messages
   });
+
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const channel = supabase
+      .channel(`messages-${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['messages', conversationId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId, queryClient]);
+
+  return result;
 }
 
 /**
@@ -122,6 +179,7 @@ export function useUpdateTopicCoverage() {
       updateTopicCoverage(conversationId, topicId, isSeeker, covered),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['conversation-topics', variables.conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
 }

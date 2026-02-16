@@ -21,6 +21,12 @@ export interface Conversation {
   topics: Topic[];
   status: 'active' | 'interested' | 'declined';
   lastUpdated: string;
+  /** Display name of the other person (for list/header) */
+  otherDisplayName?: string;
+  /** Photo URL of the other person */
+  otherPhotoUrl?: string | null;
+  /** Profile ID of the other person (for nav to /candidate/:id) */
+  otherProfileId?: string;
 }
 
 export const topicsList = [

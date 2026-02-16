@@ -4,7 +4,6 @@
 
 import type { Conversation as DbConversation, ConversationTopic } from '@/lib/db/conversations';
 import type { Conversation, Topic } from '@/data/conversations';
-import { useCurrentUserProfile } from '@/hooks/useProfile';
 
 const topicTranslationMap: Record<string, string> = {
   'parenting': 'topicParenting',
@@ -19,23 +18,32 @@ const topicTranslationMap: Record<string, string> = {
  * Map database conversation to frontend format
  */
 export function mapDbConversationToFrontend(
-  dbConv: DbConversation,
+  dbConv: any,
   messages: any[],
-  topics: ConversationTopic[],
+  topics: any[],
   currentUserId: string
 ): Conversation {
   // Determine if current user is the seeker (user_id) or candidate
   const isSeeker = dbConv.user_id === currentUserId;
   const otherProfile = isSeeker ? dbConv.candidate_profile : dbConv.user_profile;
-  
+  const seekerProfile = dbConv.user_profile;
+  const candidateProfile = dbConv.candidate_profile;
+
+  const otherDisplayName = (otherProfile?.display_name || otherProfile?.full_name || 'Unknown') as string;
+  const otherPhotoUrl = otherProfile?.photo_url ?? null;
+  const otherProfileId = (otherProfile?.id ?? (isSeeker ? dbConv.candidate_id : dbConv.user_id)) as string;
+
   return {
     id: dbConv.id,
     candidateId: dbConv.candidate_id,
-    seekerName: isSeeker ? (dbConv.user_profile?.display_name || dbConv.user_profile?.full_name || 'You') : (otherProfile?.display_name || otherProfile?.full_name || 'Unknown'),
+    seekerName: (seekerProfile?.display_name || seekerProfile?.full_name || 'Unknown'),
+    otherDisplayName,
+    otherPhotoUrl,
+    otherProfileId,
     messages: messages.map(msg => ({
       id: msg.id,
       senderId: msg.sender_id === currentUserId ? 'seeker' : 'candidate',
-      text: msg.text,
+      text: (msg as any).content ?? (msg as any).text ?? '',
       timestamp: msg.created_at,
     })),
     topics: topics.map(topic => ({

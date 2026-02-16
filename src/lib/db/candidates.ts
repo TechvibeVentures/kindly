@@ -67,8 +67,7 @@ export async function getAllCandidates(): Promise<CandidateProfile[]> {
     .from('profiles')
     .select('*')
     .eq('is_public', true)
-    .eq('is_active', true)
-    .eq('gender', 'male'); // Only show male profiles in Discover
+    .eq('is_active', true);
 
   // Exclude current user's own profile - use OR condition to handle both user_id and profile id
   if (currentUserId || currentUserProfileId) {
@@ -93,7 +92,7 @@ export async function getAllCandidates(): Promise<CandidateProfile[]> {
   }
   
   // Log for debugging
-  console.log(`Found ${data?.length || 0} public, active male profiles before filtering`);
+  console.log(`Found ${data?.length || 0} public, active profiles before filtering`);
   console.log(`Current user ID: ${currentUserId}, Profile ID: ${currentUserProfileId}`);
   
   // Additional client-side filter to ensure own profile is excluded (safety net)
@@ -108,7 +107,7 @@ export async function getAllCandidates(): Promise<CandidateProfile[]> {
     console.log(`Filtered out ${(data?.length || 0) - filtered.length} own profile(s)`);
   }
   
-  console.log(`Returning ${filtered.length} public, active male profiles (excluding own profile)`);
+  console.log(`Returning ${filtered.length} public, active profiles (excluding own profile)`);
   return filtered as CandidateProfile[];
 }
 

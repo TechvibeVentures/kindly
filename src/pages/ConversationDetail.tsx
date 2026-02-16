@@ -7,14 +7,14 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Topic } from '@/data/conversations';
 import { useConversation, useConversationMessages, useConversationTopics, useSendMessage, useUpdateTopicCoverage } from '@/hooks/useConversations';
-import { useCandidate } from '@/hooks/useCandidates';
 import { useCurrentUserProfile } from '@/hooks/useProfile';
 import { mapDbConversationToFrontend } from '@/lib/utils/conversationMapper';
+import { getPlaceholderPhoto } from '@/lib/placeholderPhoto';
 
 export default function ConversationDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { userRole, getTopicStatus, candidates } = useApp();
+  const { userRole, getTopicStatus } = useApp();
   const { t } = useLanguage();
   const [messageInput, setMessageInput] = useState('');
   const [showTopics, setShowTopics] = useState(false);
@@ -31,10 +31,11 @@ export default function ConversationDetail() {
   
   // Map database conversation to frontend format
   const conversation = dbConversation && currentUserId
-    ? mapDbConversationToFrontend(dbConversation, messages, topics, currentUserId)
+    ? mapDbConversationToFrontend(dbConversation, (messages ?? []) as Parameters<typeof mapDbConversationToFrontend>[1], (topics ?? []) as Parameters<typeof mapDbConversationToFrontend>[2], currentUserId)
     : null;
   
-  const candidate = conversation ? candidates.find(c => c.id === conversation.candidateId) : null;
+  const displayName = conversation ? (userRole === 'seeker' ? conversation.otherDisplayName : conversation.seekerName) : null;
+  const photoUrl = conversation?.otherPhotoUrl ?? (conversation?.otherProfileId ? getPlaceholderPhoto(conversation.otherProfileId) : null);
 
   const handleSend = async () => {
     if (!messageInput.trim() || !conversation || !id) return;
@@ -61,7 +62,7 @@ export default function ConversationDetail() {
   const coveredCount = conversation?.topics.filter(t => getTopicStatus(t) === 'covered').length || 0;
   const totalTopics = conversation?.topics.length || 0;
 
-  if (!conversation || !candidate) {
+  if (!conversation) {
     return (
       <div className="p-4 text-center">
         <p>{t.conversationNotFound}</p>
@@ -83,11 +84,12 @@ export default function ConversationDetail() {
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          {candidate?.photo ? (
+          {photoUrl ? (
             <img 
-              src={candidate.photo} 
-              alt={candidate.displayName}
-              className="w-10 h-10 rounded-full object-cover"
+              src={photoUrl} 
+              alt={displayName || ''}
+              className="w-10 h-10 rounded-full object-cover cursor-pointer"
+              onClick={() => conversation?.otherProfileId && navigate(`/candidate/${conversation.otherProfileId}`)}
             />
           ) : (
             <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
@@ -96,7 +98,7 @@ export default function ConversationDetail() {
           )}
           <div className="flex-1">
             <h2 className="font-semibold">
-              {userRole === 'seeker' ? candidate.displayName : conversation.seekerName}
+              {displayName}
             </h2>
           </div>
           <button 
@@ -127,7 +129,8 @@ export default function ConversationDetail() {
                     key={topic.id}
                     onClick={() => {
                       if (!id || !currentUserId || !dbConversation) return;
-                      const isSeeker = dbConversation.user_id === currentUserId;
+                      const dbConv = dbConversation as { user_id?: string };
+                      const isSeeker = dbConv.user_id === currentUserId;
                       const currentCovered = isSeeker ? topic.seekerCovered : topic.candidateCovered;
                       updateTopicMutation.mutate({
                         conversationId: id,

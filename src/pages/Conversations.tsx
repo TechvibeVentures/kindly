@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { MessageCircle, CheckCircle, Clock, ThumbsUp, ThumbsDown, Send, Circle, Check, ChevronDown } from 'lucide-react';
@@ -6,16 +6,37 @@ import { useApp } from '@/contexts/AppContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Topic } from '@/data/conversations';
+import { useConversations, useSendMessage, useUpdateTopicCoverage } from '@/hooks/useConversations';
+import { useCurrentUserProfile } from '@/hooks/useProfile';
+import { mapDbConversationToFrontend } from '@/lib/utils/conversationMapper';
+import { getPlaceholderPhoto } from '@/lib/placeholderPhoto';
 
 export default function Conversations() {
   const navigate = useNavigate();
-  const { mockConversations, userRole, sendMessage, markTopicCovered, getTopicStatus, candidates } = useApp();
+  const { userRole, getTopicStatus } = useApp();
   const { t } = useLanguage();
-  const [selectedConversation, setSelectedConversation] = useState<string | null>(
-    mockConversations.length > 0 ? mockConversations[0].id : null
-  );
+  const { data: dbConversations = [], isLoading: conversationsLoading } = useConversations();
+  const { data: currentUserProfile } = useCurrentUserProfile();
+  const sendMessageMutation = useSendMessage();
+  const updateTopicMutation = useUpdateTopicCoverage();
+
+  const currentUserId = currentUserProfile?.user_id ?? null;
+  const conversations = useMemo(() => {
+    if (!currentUserId) return [];
+    return (dbConversations as any[]).map((dbConv) =>
+      mapDbConversationToFrontend(dbConv, dbConv.messages ?? [], dbConv.topics ?? [], currentUserId)
+    );
+  }, [dbConversations, currentUserId]);
+
+  const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [showTopics, setShowTopics] = useState(false);
+
+  useEffect(() => {
+    if (conversations.length > 0 && !selectedConversation) {
+      setSelectedConversation(conversations[0].id);
+    }
+  }, [conversations, selectedConversation]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -33,16 +54,19 @@ export default function Conversations() {
     return t[key] || topic.name;
   };
 
-  const selectedConv = mockConversations.find(c => c.id === selectedConversation);
-  const selectedCandidate = selectedConv ? candidates.find(c => c.id === selectedConv.candidateId) : null;
+  const selectedConv = conversations.find(c => c.id === selectedConversation);
 
   const coveredCount = selectedConv?.topics.filter(t => getTopicStatus(t) === 'covered').length || 0;
   const totalTopics = selectedConv?.topics.length || 0;
 
-  const handleSend = () => {
-    if (!messageInput.trim() || !selectedConv) return;
-    sendMessage(selectedConv.id, messageInput.trim());
-    setMessageInput('');
+  const handleSend = async () => {
+    if (!messageInput.trim() || !selectedConv || !selectedConversation) return;
+    try {
+      await sendMessageMutation.mutateAsync({ conversationId: selectedConversation, text: messageInput.trim() });
+      setMessageInput('');
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -52,13 +76,21 @@ export default function Conversations() {
     }
   };
 
-  const getConversationPreview = (conv: typeof mockConversations[0]) => {
+  const getConversationPreview = (conv: typeof conversations[0]) => {
     if (conv.messages.length === 0) {
       return t.noMessagesYet;
     }
     const lastMsg = conv.messages[conv.messages.length - 1];
     return lastMsg.text.length > 40 ? lastMsg.text.slice(0, 40) + '...' : lastMsg.text;
   };
+
+  if (conversationsLoading && conversations.length === 0) {
+    return (
+      <div className="pb-24 md:pb-0 flex items-center justify-center min-h-[40vh]">
+        <p className="text-muted-foreground">{t.loading}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="pb-24 md:pb-0">
@@ -68,7 +100,7 @@ export default function Conversations() {
           {userRole === 'seeker' ? t.conversations : t.requests}
         </h1>
         <p className="text-sm text-muted-foreground">
-          {mockConversations.length} {userRole === 'seeker' ? t.ongoingChats : t.requests.toLowerCase()}
+          {conversations.length} {userRole === 'seeker' ? t.ongoingChats : t.requests.toLowerCase()}
         </p>
       </div>
 
@@ -81,12 +113,12 @@ export default function Conversations() {
               {userRole === 'seeker' ? t.conversations : t.requests}
             </h1>
             <p className="text-sm text-muted-foreground">
-              {mockConversations.length} {userRole === 'seeker' ? t.ongoingChats : t.requests.toLowerCase()}
+              {conversations.length} {userRole === 'seeker' ? t.ongoingChats : t.requests.toLowerCase()}
             </p>
           </div>
           
           <div className="flex-1 overflow-y-auto">
-            {mockConversations.length === 0 ? (
+            {conversations.length === 0 ? (
               <div className="text-center py-16 px-4">
                 <div className="w-16 h-16 mx-auto bg-secondary rounded-full flex items-center justify-center mb-4">
                   <MessageCircle className="w-8 h-8 text-muted-foreground" />
@@ -97,10 +129,11 @@ export default function Conversations() {
                 </p>
               </div>
             ) : (
-              mockConversations.map((conversation) => {
-                const candidate = candidates.find(c => c.id === conversation.candidateId);
+              conversations.map((conversation) => {
                 const isSelected = conversation.id === selectedConversation;
                 const convCoveredCount = conversation.topics.filter(t => getTopicStatus(t) === 'covered').length;
+                const photoUrl = conversation.otherPhotoUrl || getPlaceholderPhoto(conversation.otherProfileId);
+                const displayName = userRole === 'seeker' ? conversation.otherDisplayName : conversation.seekerName;
                 
                 return (
                   <button
@@ -110,18 +143,16 @@ export default function Conversations() {
                       isSelected ? 'bg-primary/10' : 'hover:bg-secondary/50'
                     }`}
                   >
-                    {candidate && (
-                      <img 
-                        src={candidate.photo} 
-                        alt={candidate.displayName}
-                        className="w-12 h-12 rounded-full object-cover"
-                      />
-                    )}
+                    <img 
+                      src={photoUrl} 
+                      alt={displayName || ''}
+                      className="w-12 h-12 rounded-full object-cover"
+                    />
                     
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold truncate">
-                          {userRole === 'seeker' ? candidate?.displayName : conversation.seekerName}
+                          {displayName}
                         </h3>
                         {getStatusIcon(conversation.status)}
                       </div>
@@ -145,20 +176,20 @@ export default function Conversations() {
 
         {/* Chat Area */}
         <div className="flex-1 flex flex-col bg-background">
-          {selectedConv && selectedCandidate ? (
+          {selectedConv ? (
             <>
               {/* Chat Header */}
               <div className="border-b border-border">
                 <div className="p-4 flex items-center gap-4">
-                  <button onClick={() => navigate(`/candidate/${selectedCandidate.id}`)}>
+                  <button onClick={() => selectedConv.otherProfileId && navigate(`/candidate/${selectedConv.otherProfileId}`)}>
                     <img 
-                      src={selectedCandidate.photo} 
-                      alt={selectedCandidate.displayName}
+                      src={selectedConv.otherPhotoUrl || getPlaceholderPhoto(selectedConv.otherProfileId)} 
+                      alt={selectedConv.otherDisplayName || ''}
                       className="w-10 h-10 rounded-full object-cover hover:ring-2 hover:ring-primary transition-all cursor-pointer"
                     />
                   </button>
                   <div className="flex-1">
-                    <h2 className="font-semibold">{selectedCandidate.displayName}</h2>
+                    <h2 className="font-semibold">{userRole === 'seeker' ? selectedConv.otherDisplayName : selectedConv.seekerName}</h2>
                   </div>
                   <button 
                     onClick={() => setShowTopics(!showTopics)}
@@ -185,7 +216,16 @@ export default function Conversations() {
                         return (
                           <button
                             key={topic.id}
-                            onClick={() => markTopicCovered(selectedConv.id, topic.id)}
+                            onClick={() => {
+                              const isSeeker = userRole === 'seeker';
+                              const currentCovered = isSeeker ? topic.seekerCovered : topic.candidateCovered;
+                              updateTopicMutation.mutate({
+                                conversationId: selectedConv.id,
+                                topicId: topic.id,
+                                isSeeker,
+                                covered: !currentCovered,
+                              });
+                            }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors ${
                               status === 'covered' 
                                 ? 'bg-success/20 text-success border border-success/30' 
@@ -281,7 +321,7 @@ export default function Conversations() {
 
       {/* Mobile List View */}
       <div className="md:hidden p-4 space-y-3">
-        {mockConversations.length === 0 ? (
+        {conversations.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-16 h-16 mx-auto bg-secondary rounded-full flex items-center justify-center mb-4">
               <MessageCircle className="w-8 h-8 text-muted-foreground" />
@@ -292,9 +332,10 @@ export default function Conversations() {
             </p>
           </div>
         ) : (
-          mockConversations.map((conversation, index) => {
-            const candidate = candidates.find(c => c.id === conversation.candidateId);
+          conversations.map((conversation, index) => {
             const convCoveredCount = conversation.topics.filter(t => getTopicStatus(t) === 'covered').length;
+            const photoUrl = conversation.otherPhotoUrl || getPlaceholderPhoto(conversation.otherProfileId);
+            const displayName = userRole === 'seeker' ? conversation.otherDisplayName : conversation.seekerName;
             
             return (
               <motion.button
@@ -306,18 +347,16 @@ export default function Conversations() {
                 whileTap={{ scale: 0.98 }}
                 className="kindly-card w-full p-4 flex items-center gap-4 text-left"
               >
-                {candidate && (
-                  <img 
-                    src={candidate.photo} 
-                    alt={candidate.displayName}
-                    className="w-14 h-14 rounded-full object-cover"
-                  />
-                )}
+                <img 
+                  src={photoUrl} 
+                  alt={displayName || ''}
+                  className="w-14 h-14 rounded-full object-cover"
+                />
                 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold truncate">
-                      {userRole === 'seeker' ? candidate?.displayName : conversation.seekerName}
+                      {displayName}
                     </h3>
                     {getStatusIcon(conversation.status)}
                   </div>
