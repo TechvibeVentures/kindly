@@ -144,10 +144,10 @@ export default function Admin() {
       .select('*')
       .order('created_at', { ascending: false });
     
-    // Filter out admins
+    // Filter out admins and profiles without valid user_id (e.g. orphaned/invalid rows)
     if (profilesData) {
       const nonAdminProfiles = profilesData.filter(p => 
-        !p.user_id || !adminUserIds.has(p.user_id)
+        p.user_id && !adminUserIds.has(p.user_id)
       );
       setProfiles(nonAdminProfiles);
     }
@@ -291,20 +291,48 @@ export default function Admin() {
   };
 
   const deleteProfile = async (userId: string) => {
+    if (!userId) {
+      toast({ title: 'Error', description: 'Cannot delete: invalid user', variant: 'destructive' });
+      return;
+    }
     if (!confirm('Are you sure you want to delete this member? This action cannot be undone.')) {
       return;
     }
 
-    // Delete from auth (this will cascade to profiles and roles)
-    const { error } = await supabase.auth.admin.deleteUser(userId);
-    
-    if (error) {
-      // Fallback: just delete profile
-      await supabase.from('profiles').delete().eq('user_id', userId);
-    }
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: 'Error', description: 'Not authenticated', variant: 'destructive' });
+        return;
+      }
 
-    toast({ title: 'Member deleted' });
-    fetchData();
+      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+        body: { userId },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      toast({ title: 'Member deleted' });
+      fetchData();
+    } catch (err) {
+      // Fallback: delete profile and user_roles (auth user remains but app access is revoked)
+      const { error: profileError } = await supabase.from('profiles').delete().eq('user_id', userId);
+      const { error: roleError } = await supabase.from('user_roles').delete().eq('user_id', userId);
+
+      if (profileError) {
+        toast({
+          title: 'Error',
+          description: profileError.message || 'Failed to delete member',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      toast({ title: 'Member deleted' });
+      fetchData();
+    }
   };
 
   const createInvitationFromRequest = async (request: InvitationRequest) => {
@@ -583,7 +611,8 @@ export default function Admin() {
                           variant="ghost"
                           size="icon"
                           className="text-destructive hover:text-destructive"
-                          onClick={() => deleteProfile(profile.user_id)}
+                          onClick={() => deleteProfile(profile.user_id ?? '')}
+                          disabled={!profile.user_id}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
